@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { createServer } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -47,55 +48,71 @@ server.registerTool(
     description:
       "Search, filter, sort, and list contacts from the company contacts database.",
     inputSchema: {
-      type: "object",
-      properties: {
-        mode: {
-          type: "string",
-          enum: ["lookup", "filter", "list_companies", "list_contacts"],
-          description: "Type of contact query to run",
-        },
-        q: {
-          type: "string",
-          description: "Name or general search text",
-        },
-        company: {
-          type: "string",
-          description: "Company name filter",
-        },
-        sort_by: {
-          type: "string",
-          enum: ["full_name", "associated_company", "email"],
-          description: "Field to sort by",
-        },
-        sort_dir: {
-          type: "string",
-          enum: ["asc", "desc"],
-          description: "Sort direction",
-        },
-        limit: {
-          type: "integer",
-          description: "Maximum rows to return",
-        },
-        offset: {
-          type: "integer",
-          description: "Pagination offset",
-        },
-      },
-      required: ["mode"],
+      mode: z
+        .enum(["lookup", "filter", "list_companies", "list_contacts"])
+        .describe("Type of contact query to run"),
+
+      q: z
+        .string()
+        .optional()
+        .default("")
+        .describe("Name or general search text"),
+
+      company: z
+        .string()
+        .optional()
+        .default("")
+        .describe("Company name filter"),
+
+      sort_by: z
+        .enum(["full_name", "associated_company", "email"])
+        .optional()
+        .default("full_name")
+        .describe("Field to sort by"),
+
+      sort_dir: z
+        .enum(["asc", "desc"])
+        .optional()
+        .default("asc")
+        .describe("Sort direction"),
+
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .default(10)
+        .describe("Maximum rows to return"),
+
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .default(0)
+        .describe("Pagination offset"),
     },
   },
-  async ({ input }) => {
-    const mode = input?.mode ?? "lookup";
-    const q = String(input?.q ?? "").trim();
-    const company = String(input?.company ?? "").trim();
-    const sortBy = safeSortBy(input?.sort_by);
-    const sortDir = safeSortDir(input?.sort_dir);
-    const limit = safeLimit(input?.limit);
-    const offset = safeOffset(input?.offset);
+  async ({
+    mode,
+    q = "",
+    company = "",
+    sort_by = "full_name",
+    sort_dir = "asc",
+    limit = 10,
+    offset = 0,
+  }) => {
+    const qText = String(q).trim();
+    const companyText = String(company).trim();
+    const sortBy = safeSortBy(sort_by);
+    const sortDir = safeSortDir(sort_dir);
+    const safeLim = safeLimit(limit);
+    const safeOff = safeOffset(offset);
 
     try {
       if (mode === "lookup") {
-        if (!q) {
+        if (!qText) {
           return {
             content: [{ type: "text", text: "Missing lookup text." }],
             structuredContent: { rows: [] },
@@ -111,7 +128,7 @@ server.registerTool(
           ORDER BY full_name ASC
           LIMIT $2 OFFSET $3
         `;
-        const result = await pool.query(sql, [`%${q}%`, limit, offset]);
+        const result = await pool.query(sql, [`%${qText}%`, safeLim, safeOff]);
 
         return {
           content: [
@@ -125,7 +142,8 @@ server.registerTool(
       }
 
       if (mode === "filter") {
-        const searchCompany = company || q;
+        const searchCompany = companyText || qText;
+
         if (!searchCompany) {
           return {
             content: [{ type: "text", text: "Missing company filter." }],
@@ -140,7 +158,7 @@ server.registerTool(
           ORDER BY ${sortBy} ${sortDir}
           LIMIT $2 OFFSET $3
         `;
-        const result = await pool.query(sql, [`%${searchCompany}%`, limit, offset]);
+        const result = await pool.query(sql, [`%${searchCompany}%`, safeLim, safeOff]);
 
         return {
           content: [
@@ -162,7 +180,7 @@ server.registerTool(
           ORDER BY associated_company ASC
           LIMIT $1 OFFSET $2
         `;
-        const result = await pool.query(sql, [limit, offset]);
+        const result = await pool.query(sql, [safeLim, safeOff]);
 
         return {
           content: [
@@ -182,7 +200,7 @@ server.registerTool(
           ORDER BY ${sortBy} ${sortDir}
           LIMIT $1 OFFSET $2
         `;
-        const result = await pool.query(sql, [limit, offset]);
+        const result = await pool.query(sql, [safeLim, safeOff]);
 
         return {
           content: [
@@ -208,7 +226,6 @@ server.registerTool(
     }
   }
 );
-
 const PORT = Number(process.env.PORT ?? 8787);
 const MCP_PATH = "/mcp";
 
