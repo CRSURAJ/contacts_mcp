@@ -15,7 +15,7 @@ const pool = new Pool({
 });
 
 const server = new McpServer({
-  name: "contacts-mcp",
+  name: "contacts_mcp",
   version: "0.1.0",
 });
 
