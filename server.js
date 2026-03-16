@@ -55,8 +55,40 @@ server.registerTool(
   "contacts_query",
   {
     title: "Contacts query",
-    description: "Search, filter, sort, and list contacts from the company contacts database.",
-    inputSchema: ContactsQueryInputSchema,
+    description:
+      "Search, filter, sort, and list contacts from the company contacts database.",
+    inputSchema: {
+      mode: z
+        .enum(["lookup", "filter", "list_companies", "list_contacts"])
+        .describe("Type of contact query to run"),
+      q: z.string().optional().default("").describe("Name or general search text"),
+      company: z.string().optional().default("").describe("Company name filter"),
+      sort_by: z
+        .enum(["full_name", "associated_company", "email"])
+        .optional()
+        .default("full_name")
+        .describe("Field to sort by"),
+      sort_dir: z
+        .enum(["asc", "desc"])
+        .optional()
+        .default("asc")
+        .describe("Sort direction"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .default(10)
+        .describe("Maximum rows to return"),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .default(0)
+        .describe("Pagination offset"),
+    },
   },
   async ({
     mode,
@@ -95,7 +127,9 @@ server.registerTool(
         const result = await pool.query(sql, [`%${qText}%`, safeLim, safeOff]);
 
         return {
-          content: [{ type: "text", text: `Found ${result.rows.length} matching contact(s).` }],
+          content: [
+            { type: "text", text: `Found ${result.rows.length} matching contact(s).` },
+          ],
           structuredContent: { rows: result.rows },
         };
       }
@@ -119,7 +153,9 @@ server.registerTool(
         const result = await pool.query(sql, [`%${searchCompany}%`, safeLim, safeOff]);
 
         return {
-          content: [{ type: "text", text: `Found ${result.rows.length} contact(s) for company filter.` }],
+          content: [
+            { type: "text", text: `Found ${result.rows.length} contact(s) for company filter.` },
+          ],
           structuredContent: { rows: result.rows },
         };
       }
@@ -136,7 +172,12 @@ server.registerTool(
         const result = await pool.query(sql, [safeLim, safeOff]);
 
         return {
-          content: [{ type: "text", text: `Returned ${result.rows.length} compan${result.rows.length === 1 ? "y" : "ies"}.` }],
+          content: [
+            {
+              type: "text",
+              text: `Returned ${result.rows.length} compan${result.rows.length === 1 ? "y" : "ies"}.`,
+            },
+          ],
           structuredContent: { rows: result.rows },
         };
       }
@@ -151,7 +192,9 @@ server.registerTool(
         const result = await pool.query(sql, [safeLim, safeOff]);
 
         return {
-          content: [{ type: "text", text: `Returned ${result.rows.length} contact(s).` }],
+          content: [
+            { type: "text", text: `Returned ${result.rows.length} contact(s).` },
+          ],
           structuredContent: { rows: result.rows },
         };
       }
@@ -169,7 +212,6 @@ server.registerTool(
     }
   }
 );
-
 const PORT = Number(process.env.PORT ?? 8787);
 const MCP_PATH = "/mcp";
 
