@@ -111,6 +111,26 @@ function safeOffset(value) {
   return Math.max(0, Math.floor(n));
 }
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9@.+\s()-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractSearchTerms(value) {
+  const stopWords = new Set([
+    "find", "me", "the", "a", "an", "contact", "contacts",
+    "detail", "details", "for", "of", "show", "give",
+    "email", "phone", "number", "please"
+  ]);
+
+  return normalizeSearchText(value)
+    .split(" ")
+    .filter(Boolean)
+    .filter((term) => !stopWords.has(term));
+}
 /** ---------- MCP server factory ---------- */
 
 function createMcpServer() {
@@ -175,58 +195,91 @@ function createMcpServer() {
 
       try {
         if (mode === "lookup") {
-          if (!qText) {
-            return {
-              content: [{ type: "text", text: "Missing lookup text." }],
-              structuredContent: { rows: [] },
-            };
-          }
+  if (!qText) {
+    return {
+      content: [{ type: "text", text: "Missing lookup text." }],
+      structuredContent: { rows: [] },
+    };
+  }
 
-          const sql = `
-            SELECT full_name, email, phone_number, associated_company
-            FROM public.contacts
-            WHERE full_name ILIKE $1
-               OR email ILIKE $1
-               OR phone_number ILIKE $1
-               OR associated_company ILIKE $1
-            ORDER BY full_name ASC
-            LIMIT $2 OFFSET $3
-          `;
-          const result = await pool.query(sql, [`%${qText}%`, safeLim, safeOff]);
+  const cleaned = normalizeSearchText(qText);
+  const terms = extractSearchTerms(qText);
 
-          return {
-            content: [
-              { type: "text", text: `Found ${result.rows.length} matching contact(s).` },
-            ],
-            structuredContent: { rows: result.rows },
-          };
-        }
+  if (terms.length === 0) {
+    return {
+      content: [{ type: "text", text: "Missing lookup text." }],
+      structuredContent: { rows: [] },
+    };
+  }
 
+  const haystack = `
+    COALESCE(full_name, '') || ' ' ||
+    COALESCE(email, '') || ' ' ||
+    COALESCE(phone_number, '') || ' ' ||
+    COALESCE(associated_company, '')
+  `;
+
+  const whereParts = terms.map((_, i) => `${haystack} ILIKE $${i + 1}`);
+
+  const sql = `
+    SELECT full_name, email, phone_number, associated_company
+    FROM public.contacts
+    WHERE ${whereParts.join(" AND ")}
+    ORDER BY
+      CASE
+        WHEN COALESCE(full_name, '') ILIKE $${terms.length + 1} THEN 1
+        WHEN COALESCE(email, '') ILIKE $${terms.length + 1} THEN 2
+        WHEN ${haystack} ILIKE $${terms.length + 2} THEN 3
+        WHEN COALESCE(associated_company, '') ILIKE $${terms.length + 1} THEN 4
+        ELSE 5
+      END,
+      full_name ASC
+    LIMIT $${terms.length + 3} OFFSET $${terms.length + 4}
+  `;
+
+  const params = [
+    ...terms.map((term) => `%${term}%`),
+    `%${cleaned}%`,
+    `${cleaned}%`,
+    safeLim,
+    safeOff,
+  ];
+
+  const result = await pool.query(sql, params);
+
+  return {
+    content: [
+      { type: "text", text: `Found ${result.rows.length} matching contact(s).` },
+    ],
+    structuredContent: { rows: result.rows },
+  };
+}
         if (mode === "filter") {
-          const searchCompany = companyText || qText;
-          if (!searchCompany) {
-            return {
-              content: [{ type: "text", text: "Missing company filter." }],
-              structuredContent: { rows: [] },
-            };
-          }
+  const searchCompany = companyText || qText;
+  if (!searchCompany) {
+    return {
+      content: [{ type: "text", text: "Missing company filter." }],
+      structuredContent: { rows: [] },
+    };
+  }
 
-          const sql = `
-            SELECT full_name, email, phone_number, associated_company
-            FROM public.contacts
-            WHERE associated_company ILIKE $1
-            ORDER BY ${sortBy} ${sortDir}
-            LIMIT $2 OFFSET $3
-          `;
-          const result = await pool.query(sql, [`%${searchCompany}%`, safeLim, safeOff]);
+  const cleanedCompany = normalizeSearchText(searchCompany);
+  const sql = `
+    SELECT full_name, email, phone_number, associated_company
+    FROM public.contacts
+    WHERE COALESCE(associated_company, '') ILIKE $1
+    ORDER BY ${sortBy} ${sortDir}
+    LIMIT $2 OFFSET $3
+  `;
+  const result = await pool.query(sql, [`%${cleanedCompany}%`, safeLim, safeOff]);
 
-          return {
-            content: [
-              { type: "text", text: `Found ${result.rows.length} contact(s) for company filter.` },
-            ],
-            structuredContent: { rows: result.rows },
-          };
-        }
+  return {
+    content: [
+      { type: "text", text: `Found ${result.rows.length} contact(s) for company filter.` },
+    ],
+    structuredContent: { rows: result.rows },
+  };
+}
 
         if (mode === "list_companies") {
           const sql = `
