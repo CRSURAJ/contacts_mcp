@@ -91,7 +91,13 @@ async function readJsonBody(req) {
 }
 
 function safeSortBy(value) {
-  const allowed = new Set(["full_name", "associated_company", "email"]);
+  const allowed = new Set([
+    "full_name",
+    "associated_company",
+    "email",
+    "possible_job_title",
+    "id"
+  ]);
   return allowed.has(value) ? value : "full_name";
 }
 
@@ -150,11 +156,17 @@ function createMcpServer() {
           .describe("Type of contact query to run"),
         q: z.string().optional().default("").describe("Name, email, phone, or general search text"),
         company: z.string().optional().default("").describe("Company name filter"),
-        sort_by: z
-          .enum(["full_name", "associated_company", "email"])
-          .optional()
-          .default("full_name")
-          .describe("Field to sort by"),
+sort_by: z
+  .enum([
+    "full_name",
+    "associated_company",
+    "email",
+    "possible_job_title",
+    "id"
+  ])
+  .optional()
+  .default("full_name")
+  .describe("Field to sort by"),
         sort_dir: z
           .enum(["asc", "desc"])
           .optional()
@@ -194,7 +206,7 @@ function createMcpServer() {
       const safeOff = safeOffset(offset);
 
       try {
-        if (mode === "lookup") {
+       if (mode === "lookup") {
   if (!qText) {
     return {
       content: [{ type: "text", text: "Missing lookup text." }],
@@ -202,50 +214,33 @@ function createMcpServer() {
     };
   }
 
-  const cleaned = normalizeSearchText(qText);
-  const terms = extractSearchTerms(qText);
-
-  if (terms.length === 0) {
-    return {
-      content: [{ type: "text", text: "Missing lookup text." }],
-      structuredContent: { rows: [] },
-    };
-  }
-
-  const haystack = `
-    COALESCE(full_name, '') || ' ' ||
-    COALESCE(email, '') || ' ' ||
-    COALESCE(phone_number, '') || ' ' ||
-    COALESCE(associated_company, '')
-  `;
-
-  const whereParts = terms.map((_, i) => `${haystack} ILIKE $${i + 1}`);
-
   const sql = `
-    SELECT full_name, email, phone_number, associated_company
+    SELECT
+      id,
+      full_name,
+      email,
+      phone_number,
+      associated_company,
+      possible_job_title
     FROM public.contacts
-    WHERE ${whereParts.join(" AND ")}
+    WHERE full_name ILIKE $1
+       OR email ILIKE $1
+       OR phone_number ILIKE $1
+       OR associated_company ILIKE $1
+       OR possible_job_title ILIKE $1
     ORDER BY
       CASE
-        WHEN COALESCE(full_name, '') ILIKE $${terms.length + 1} THEN 1
-        WHEN COALESCE(email, '') ILIKE $${terms.length + 1} THEN 2
-        WHEN ${haystack} ILIKE $${terms.length + 2} THEN 3
-        WHEN COALESCE(associated_company, '') ILIKE $${terms.length + 1} THEN 4
+        WHEN full_name ILIKE $1 THEN 1
+        WHEN possible_job_title ILIKE $1 THEN 2
+        WHEN email ILIKE $1 THEN 3
+        WHEN associated_company ILIKE $1 THEN 4
         ELSE 5
       END,
       full_name ASC
-    LIMIT $${terms.length + 3} OFFSET $${terms.length + 4}
+    LIMIT $2 OFFSET $3
   `;
 
-  const params = [
-    ...terms.map((term) => `%${term}%`),
-    `%${cleaned}%`,
-    `${cleaned}%`,
-    safeLim,
-    safeOff,
-  ];
-
-  const result = await pool.query(sql, params);
+  const result = await pool.query(sql, [`%${qText}%`, safeLim, safeOff]);
 
   return {
     content: [
@@ -263,15 +258,20 @@ function createMcpServer() {
     };
   }
 
-  const cleanedCompany = normalizeSearchText(searchCompany);
   const sql = `
-    SELECT full_name, email, phone_number, associated_company
+    SELECT
+      id,
+      full_name,
+      email,
+      phone_number,
+      associated_company,
+      possible_job_title
     FROM public.contacts
-    WHERE COALESCE(associated_company, '') ILIKE $1
-    ORDER BY ${sortBy} ${sortDir}
+    WHERE associated_company ILIKE $1
+    ORDER BY ${sortBy} ${sortDir}, full_name ASC
     LIMIT $2 OFFSET $3
   `;
-  const result = await pool.query(sql, [`%${cleanedCompany}%`, safeLim, safeOff]);
+  const result = await pool.query(sql, [`%${searchCompany}%`, safeLim, safeOff]);
 
   return {
     content: [
@@ -303,22 +303,28 @@ function createMcpServer() {
           };
         }
 
-        if (mode === "list_contacts") {
-          const sql = `
-            SELECT full_name, email, phone_number, associated_company
-            FROM public.contacts
-            ORDER BY ${sortBy} ${sortDir}
-            LIMIT $1 OFFSET $2
-          `;
-          const result = await pool.query(sql, [safeLim, safeOff]);
+if (mode === "list_contacts") {
+  const sql = `
+    SELECT
+      id,
+      full_name,
+      email,
+      phone_number,
+      associated_company,
+      possible_job_title
+    FROM public.contacts
+    ORDER BY ${sortBy} ${sortDir}, full_name ASC
+    LIMIT $1 OFFSET $2
+  `;
+  const result = await pool.query(sql, [safeLim, safeOff]);
 
-          return {
-            content: [
-              { type: "text", text: `Returned ${result.rows.length} contact(s).` },
-            ],
-            structuredContent: { rows: result.rows },
-          };
-        }
+  return {
+    content: [
+      { type: "text", text: `Returned ${result.rows.length} contact(s).` },
+    ],
+    structuredContent: { rows: result.rows },
+  };
+}
 
         return {
           content: [{ type: "text", text: `Unknown mode: ${mode}` }],
